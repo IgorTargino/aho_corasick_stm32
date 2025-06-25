@@ -2,11 +2,10 @@
 /**
   ******************************************************************************
   * @file           : main.c
-  * @brief          : STM32 Network Packet Filter using Aho-Corasick Algorithm
+  * @brief          : Simple STM32 Aho-Corasick Pattern Detector
   ******************************************************************************
-  * Network packet filtering with realistic pattern count for 80 vertices
-  * Each vertex = 1 character state in the automaton
-  * Estimated ~15-20 patterns maximum for 80 vertices
+  * Basic implementation for learning purposes
+  * Simple UART input/output, basic pattern matching
   ******************************************************************************
   */
 /* USER CODE END Header */
@@ -25,23 +24,6 @@
 /* Private typedef -----------------------------------------------------------*/
 /* USER CODE BEGIN PTD */
 
-typedef enum {
-    FILTER_STATE_IDLE,
-    FILTER_STATE_RECEIVING,
-    FILTER_STATE_PROCESSING,
-    FILTER_STATE_COMPLETE
-} filter_state_t;
-
-typedef struct {
-    char buffer[256];           // Buffer para dados recebidos
-    uint16_t length;
-    uint16_t rx_index;
-    filter_state_t state;
-    uint32_t matches_found;
-    uint32_t packets_processed;
-    bool processing_active;
-} packet_filter_t;
-
 /* USER CODE END PTD */
 
 /* Private define ------------------------------------------------------------*/
@@ -49,11 +31,6 @@ typedef struct {
 
 #define LED_GREEN_Pin GPIO_PIN_5
 #define LED_GREEN_GPIO_Port GPIOA
-#define USER_BUTTON_Pin GPIO_PIN_13
-#define USER_BUTTON_GPIO_Port GPIOC
-
-#define PACKET_START_MARKER "PKT:"
-#define PACKET_END_MARKER "\r\n"
 
 /* USER CODE END PD */
 
@@ -67,50 +44,21 @@ UART_HandleTypeDef huart2;
 
 /* USER CODE BEGIN PV */
 
-// Padrões críticos de segurança - dimensionados para ~80 vértices
-// Estimativa: 15-20 padrões curtos/médios para não exceder limite de vértices
-static const char* security_threat_patterns[18] = {
-    // SQL Injection (padrões curtos mais efetivos)
-    "' OR '1'='1",      // 11 chars
-    "admin'--",         // 8 chars  
-    "UNION SELECT",     // 12 chars
-    "DROP TABLE",       // 10 chars
-    
-    // XSS básico
-    "<script>",         // 8 chars
-    "javascript:",      // 11 chars
-    "onerror=",         // 8 chars
-    
-    // Comandos perigosos
-    "/bin/sh",          // 7 chars
-    "cmd.exe",          // 7 chars
-    "wget ",            // 5 chars
-    "curl ",            // 5 chars
-    
-    // Network exploits
-    "nc -l",            // 5 chars
-    "nmap ",            // 5 chars
-    
-    // Malware indicators
-    "payload",          // 7 chars
-    "shell",            // 5 chars
-    "exploit",          // 7 chars
-    
-    // File inclusion
-    "../",              // 3 chars
-    "..\\",             // 3 chars
+// Poucos padrões simples para teste
+static const char* test_patterns[] = {
+    "virus",
+    "hack",
+    "attack",
+    "malware",
+    "trojan"
 };
 
-// Cálculo estimado de vértices:
-// - Padrão mais longo: "' OR '1'='1" = 11 vértices
-// - Total caracteres únicos: ~45-50 vértices na trie
-// - Links de falha e otimizações: ~25-30 vértices extras
-// - Total estimado: ~70-80 vértices (dentro do limite)
-
-static ac_automaton_t packet_filter_ac;
-static packet_filter_t filter_context;
-static char uart_rx_buffer[64];
-static char uart_tx_buffer[256];
+static ac_automaton_t detector;
+static char input_buffer[128];
+static char output_buffer[128];
+static uint8_t uart_byte;
+static uint8_t buffer_index = 0;
+static uint32_t total_matches = 0;
 
 /* USER CODE END PV */
 
@@ -121,256 +69,26 @@ static void MX_USART2_UART_Init(void);
 
 /* USER CODE BEGIN PFP */
 
-static void packet_filter_init(void);
-static void packet_filter_reset(void);
-static void packet_filter_process_byte(uint8_t byte);
-static void packet_filter_analyze(void);
-static void send_status_report(void);
-static void send_vertex_usage_report(void);
-static void on_threat_pattern_found(const char* pattern, int position);
+void pattern_found(const char* pattern, int position);
 
 /* USER CODE END PFP */
 
 /* USER CODE BEGIN 0 */
 
 /**
- * @brief Callback chamado quando um padrão malicioso é encontrado
+ * @brief Chamado quando encontra um padrão
  */
-static void on_threat_pattern_found(const char* pattern, int position) {
-    filter_context.matches_found++;
+void pattern_found(const char* pattern, int position) {
+    total_matches++;
     
-    // Pisca LED verde para indicar detecção
+    // Pisca LED
     HAL_GPIO_WritePin(LED_GREEN_GPIO_Port, LED_GREEN_Pin, GPIO_PIN_SET);
-    HAL_Delay(100);
+    HAL_Delay(200);
     HAL_GPIO_WritePin(LED_GREEN_GPIO_Port, LED_GREEN_Pin, GPIO_PIN_RESET);
     
-    // Envia alerta via UART
-    snprintf(uart_tx_buffer, sizeof(uart_tx_buffer), 
-             "THREAT: Pattern '%s' found at position %d\r\n", pattern, position);
-    HAL_UART_Transmit(&huart2, (uint8_t*)uart_tx_buffer, strlen(uart_tx_buffer), 1000);
-}
-
-/**
- * @brief Inicializa o sistema de filtragem de pacotes
- */
-static void packet_filter_init(void) {
-    // Inicializa o autômato Aho-Corasick
-    ac_init(&packet_filter_ac, on_threat_pattern_found);
-    
-    // Adiciona padrões de ameaças (limitado para não exceder 80 vértices)
-    uint8_t patterns_added = 0;
-    const uint8_t max_patterns = sizeof(security_threat_patterns) / sizeof(security_threat_patterns[0]);
-    
-    for (int i = 0; i < max_patterns; i++) {
-        if (ac_add_pattern(&packet_filter_ac, security_threat_patterns[i])) {
-            patterns_added++;
-        } else {
-            snprintf(uart_tx_buffer, sizeof(uart_tx_buffer), 
-                     "ERROR: Failed to add pattern %d: '%s' - Vertex limit reached!\r\n", 
-                     i, security_threat_patterns[i]);
-            HAL_UART_Transmit(&huart2, (uint8_t*)uart_tx_buffer, strlen(uart_tx_buffer), 1000);
-            break;
-        }
-    }
-    
-    // Constrói o autômato
-    ac_build(&packet_filter_ac);
-    
-    // Inicializa contexto do filtro
-    packet_filter_reset();
-    
-    // Relatório detalhado de inicialização
-    snprintf(uart_tx_buffer, sizeof(uart_tx_buffer), 
-             "INIT: Packet filter ready\r\n"
-             "  Patterns loaded: %d/%d\r\n"
-             "  Vertices used: %d/80\r\n",
-             patterns_added, max_patterns, packet_filter_ac.vertex_count);
-    HAL_UART_Transmit(&huart2, (uint8_t*)uart_tx_buffer, strlen(uart_tx_buffer), 1000);
-    
-    // Envia relatório de uso de vértices
-    send_vertex_usage_report();
-    
-    // Instruções de uso
-    const char* instructions = 
-        "Commands:\r\n"
-        "  PKT:<data>\\r\\n  - Process packet data\r\n"
-        "  STATUS\\r\\n      - Show statistics\r\n"
-        "  VERTICES\\r\\n    - Show vertex usage\r\n"
-        "  RESET\\r\\n       - Reset counters\r\n"
-        "Ready for packet analysis...\r\n";
-    HAL_UART_Transmit(&huart2, (uint8_t*)instructions, strlen(instructions), 2000);
-}
-
-/**
- * @brief Envia relatório detalhado do uso de vértices
- */
-static void send_vertex_usage_report(void) {
-    float vertex_usage = (packet_filter_ac.vertex_count * 100.0f) / AC_MAX_VERTICES;
-    
-    snprintf(uart_tx_buffer, sizeof(uart_tx_buffer), 
-             "VERTEX USAGE REPORT:\r\n"
-             "  Total vertices: %d/%d (%.1f%%)\r\n"
-             "  Remaining: %d vertices\r\n"
-             "  Patterns loaded: %d\r\n"
-             "  Transitions per vertex: %d max\r\n",
-             packet_filter_ac.vertex_count, AC_MAX_VERTICES, vertex_usage,
-             AC_MAX_VERTICES - packet_filter_ac.vertex_count,
-             packet_filter_ac.pattern_count,
-             AC_MAX_TRANSITIONS_PER_VERTEX);
-    
-    HAL_UART_Transmit(&huart2, (uint8_t*)uart_tx_buffer, strlen(uart_tx_buffer), 2000);
-    
-    // Lista os padrões carregados
-    HAL_UART_Transmit(&huart2, (uint8_t*)"LOADED PATTERNS:\r\n", 18, 1000);
-    for (int i = 0; i < packet_filter_ac.pattern_count; i++) {
-        snprintf(uart_tx_buffer, sizeof(uart_tx_buffer), 
-                 "  %2d: '%s' (%d chars)\r\n", 
-                 i+1, packet_filter_ac.patterns[i], strlen(packet_filter_ac.patterns[i]));
-        HAL_UART_Transmit(&huart2, (uint8_t*)uart_tx_buffer, strlen(uart_tx_buffer), 1000);
-    }
-}
-
-/**
- * @brief Reseta o contexto do filtro
- */
-static void packet_filter_reset(void) {
-    memset(&filter_context, 0, sizeof(filter_context));
-    filter_context.state = FILTER_STATE_IDLE;
-}
-
-/**
- * @brief Processa um byte recebido via UART
- */
-static void packet_filter_process_byte(uint8_t byte) {
-    static char command_buffer[16];
-    static uint8_t cmd_index = 0;
-    
-    switch (filter_context.state) {
-        case FILTER_STATE_IDLE:
-            // Verifica se é início de comando
-            if (byte == 'P' || byte == 'S' || byte == 'R' || byte == 'V') {
-                command_buffer[0] = byte;
-                cmd_index = 1;
-            } else if (cmd_index > 0) {
-                command_buffer[cmd_index++] = byte;
-                
-                // Verifica comando PKT:
-                if (cmd_index == 4 && strncmp(command_buffer, "PKT:", 4) == 0) {
-                    filter_context.state = FILTER_STATE_RECEIVING;
-                    filter_context.rx_index = 0;
-                    cmd_index = 0;
-                }
-                // Verifica comando STATUS
-                else if (cmd_index == 6 && strncmp(command_buffer, "STATUS", 6) == 0) {
-                    send_status_report();
-                    cmd_index = 0;
-                }
-                // Verifica comando VERTICES
-                else if (cmd_index == 8 && strncmp(command_buffer, "VERTICES", 8) == 0) {
-                    send_vertex_usage_report();
-                    cmd_index = 0;
-                }
-                // Verifica comando RESET
-                else if (cmd_index == 5 && strncmp(command_buffer, "RESET", 5) == 0) {
-                    filter_context.matches_found = 0;
-                    filter_context.packets_processed = 0;
-                    HAL_UART_Transmit(&huart2, (uint8_t*)"RESET: Counters cleared\r\n", 25, 1000);
-                    cmd_index = 0;
-                }
-                // Reset se comando inválido
-                else if (cmd_index >= 10) {
-                    cmd_index = 0;
-                }
-            }
-            break;
-            
-        case FILTER_STATE_RECEIVING:
-            // Verifica fim do pacote
-            if (byte == '\r') {
-                filter_context.state = FILTER_STATE_PROCESSING;
-            } else if (filter_context.rx_index < sizeof(filter_context.buffer) - 1) {
-                filter_context.buffer[filter_context.rx_index++] = byte;
-            } else {
-                // Buffer overflow - descarta pacote
-                HAL_UART_Transmit(&huart2, (uint8_t*)"ERROR: Packet too large\r\n", 25, 1000);
-                filter_context.state = FILTER_STATE_IDLE;
-                filter_context.rx_index = 0;
-            }
-            break;
-            
-        case FILTER_STATE_PROCESSING:
-            if (byte == '\n') {
-                filter_context.state = FILTER_STATE_COMPLETE;
-            }
-            break;
-            
-        default:
-            filter_context.state = FILTER_STATE_IDLE;
-            break;
-    }
-}
-
-/**
- * @brief Analisa o pacote recebido usando Aho-Corasick
- */
-static void packet_filter_analyze(void) {
-    if (filter_context.state != FILTER_STATE_COMPLETE) {
-        return;
-    }
-    
-    // Null-terminate buffer
-    filter_context.buffer[filter_context.rx_index] = '\0';
-    filter_context.length = filter_context.rx_index;
-    
-    uint32_t matches_before = filter_context.matches_found;
-    
-    // Executa análise Aho-Corasick
-    ac_search(&packet_filter_ac, filter_context.buffer);
-    
-    filter_context.packets_processed++;
-    
-    // Relatório do resultado
-    uint32_t new_matches = filter_context.matches_found - matches_before;
-    if (new_matches > 0) {
-        snprintf(uart_tx_buffer, sizeof(uart_tx_buffer), 
-                 "ALERT: %lu threat(s) detected in packet #%lu (%u bytes)\r\n",
-                 new_matches, filter_context.packets_processed, filter_context.length);
-    } else {
-        snprintf(uart_tx_buffer, sizeof(uart_tx_buffer), 
-                 "CLEAN: Packet #%lu analyzed (%u bytes) - No threats\r\n",
-                 filter_context.packets_processed, filter_context.length);
-    }
-    
-    HAL_UART_Transmit(&huart2, (uint8_t*)uart_tx_buffer, strlen(uart_tx_buffer), 1000);
-    
-    // Reset para próximo pacote
-    filter_context.state = FILTER_STATE_IDLE;
-    filter_context.rx_index = 0;
-    memset(filter_context.buffer, 0, sizeof(filter_context.buffer));
-}
-
-/**
- * @brief Envia relatório de status
- */
-static void send_status_report(void) {
-    float vertex_usage = (packet_filter_ac.vertex_count * 100.0f) / AC_MAX_VERTICES;
-    
-    snprintf(uart_tx_buffer, sizeof(uart_tx_buffer), 
-             "STATUS REPORT:\r\n"
-             "  Packets processed: %lu\r\n"
-             "  Threats detected: %lu\r\n"
-             "  Patterns loaded: %d\r\n"
-             "  Vertices used: %d/80 (%.1f%%)\r\n"
-             "  Filter state: %s\r\n",
-             filter_context.packets_processed,
-             filter_context.matches_found,
-             packet_filter_ac.pattern_count,
-             packet_filter_ac.vertex_count, vertex_usage,
-             filter_context.state == FILTER_STATE_IDLE ? "IDLE" :
-             filter_context.state == FILTER_STATE_RECEIVING ? "RECEIVING" :
-             filter_context.state == FILTER_STATE_PROCESSING ? "PROCESSING" : "COMPLETE");
-    
-    HAL_UART_Transmit(&huart2, (uint8_t*)uart_tx_buffer, strlen(uart_tx_buffer), 2000);
+    // Envia resultado
+    sprintf(output_buffer, "FOUND: %s at %d\r\n", pattern, position);
+    HAL_UART_Transmit(&huart2, (uint8_t*)output_buffer, strlen(output_buffer), 1000);
 }
 
 /* USER CODE END 0 */
@@ -406,11 +124,23 @@ int main(void) {
 
   /* USER CODE BEGIN 2 */
   
-  // Inicializa sistema de filtragem
-  packet_filter_init();
+  // Setup simples do detector
+  ac_init(&detector, pattern_found);
   
-  // Inicia recepção UART em modo interrupt
-  HAL_UART_Receive_IT(&huart2, (uint8_t*)uart_rx_buffer, 1);
+  // Adiciona padrões
+  for (int i = 0; i < 5; i++) {
+      ac_add_pattern(&detector, test_patterns[i]);
+  }
+  
+  // Constrói o detector
+  ac_build(&detector);
+  
+  // Mensagem inicial
+  HAL_UART_Transmit(&huart2, (uint8_t*)"STM32 Pattern Detector Ready\r\n", 31, 1000);
+  HAL_UART_Transmit(&huart2, (uint8_t*)"Type text and press ENTER\r\n", 28, 1000);
+  
+  // Inicia recepção
+  HAL_UART_Receive_IT(&huart2, &uart_byte, 1);
 
   /* USER CODE END 2 */
 
@@ -421,35 +151,12 @@ int main(void) {
 
     /* USER CODE BEGIN 3 */
     
-    // Processa análise de pacotes
-    packet_filter_analyze();
+    // Loop principal vazio - tudo é feito por interrupt
+    HAL_Delay(100);
     
-    // Verifica botão do usuário para relatório de vértices
-    if (HAL_GPIO_ReadPin(USER_BUTTON_GPIO_Port, USER_BUTTON_Pin) == GPIO_PIN_RESET) {
-        HAL_Delay(50); // Debounce
-        if (HAL_GPIO_ReadPin(USER_BUTTON_GPIO_Port, USER_BUTTON_Pin) == GPIO_PIN_RESET) {
-            send_vertex_usage_report();
-            while (HAL_GPIO_ReadPin(USER_BUTTON_GPIO_Port, USER_BUTTON_Pin) == GPIO_PIN_RESET) {
-                HAL_Delay(10);
-            }
-        }
-    }
-    
-    // Heartbeat LED (sistema ativo)
-    static uint32_t last_heartbeat = 0;
-    if (HAL_GetTick() - last_heartbeat > 3000) {
-        HAL_GPIO_TogglePin(LED_GREEN_GPIO_Port, LED_GREEN_Pin);
-        HAL_Delay(50);
-        HAL_GPIO_TogglePin(LED_GREEN_GPIO_Port, LED_GREEN_Pin);
-        last_heartbeat = HAL_GetTick();
-    }
-    
-    HAL_Delay(10);
   }
   /* USER CODE END 3 */
 }
-
-// ...existing code... (resto das funções permanecem inalteradas)
 
 /**
   * @brief System Clock Configuration
@@ -527,12 +234,6 @@ static void MX_GPIO_Init(void) {
   /*Configure GPIO pin Output Level */
   HAL_GPIO_WritePin(LED_GREEN_GPIO_Port, LED_GREEN_Pin, GPIO_PIN_RESET);
 
-  /*Configure GPIO pin : USER_BUTTON_Pin */
-  GPIO_InitStruct.Pin = USER_BUTTON_Pin;
-  GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
-  GPIO_InitStruct.Pull = GPIO_PULLUP;
-  HAL_GPIO_Init(USER_BUTTON_GPIO_Port, &GPIO_InitStruct);
-
   /*Configure GPIO pin : LED_GREEN_Pin */
   GPIO_InitStruct.Pin = LED_GREEN_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
@@ -544,15 +245,40 @@ static void MX_GPIO_Init(void) {
 /* USER CODE BEGIN 4 */
 
 /**
- * @brief Callback de recepção UART
+ * @brief Callback UART - processa cada byte recebido
  */
 void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart) {
     if (huart->Instance == USART2) {
-        // Processa byte recebido
-        packet_filter_process_byte((uint8_t)uart_rx_buffer[0]);
         
-        // Reinicia recepção para próximo byte
-        HAL_UART_Receive_IT(&huart2, (uint8_t*)uart_rx_buffer, 1);
+        // Se recebeu ENTER, processa o texto
+        if (uart_byte == '\r' || uart_byte == '\n') {
+            if (buffer_index > 0) {
+                // Termina string
+                input_buffer[buffer_index] = '\0';
+                
+                // Executa busca de padrões
+                ac_search(&detector, input_buffer);
+                
+                // Mostra resultado
+                sprintf(output_buffer, "Analyzed: '%s' - Total matches: %lu\r\n", 
+                       input_buffer, total_matches);
+                HAL_UART_Transmit(&huart2, (uint8_t*)output_buffer, strlen(output_buffer), 1000);
+                
+                // Reset buffer
+                buffer_index = 0;
+                memset(input_buffer, 0, sizeof(input_buffer));
+            }
+        }
+        // Se é caractere normal, adiciona ao buffer
+        else if (buffer_index < sizeof(input_buffer) - 1) {
+            input_buffer[buffer_index++] = uart_byte;
+            
+            // Echo do caractere
+            HAL_UART_Transmit(&huart2, &uart_byte, 1, 100);
+        }
+        
+        // Continua recebendo
+        HAL_UART_Receive_IT(&huart2, &uart_byte, 1);
     }
 }
 
