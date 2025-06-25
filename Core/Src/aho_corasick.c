@@ -7,8 +7,9 @@ static const uint8_t ROOT_VERTEX = 0;
 // Converte um caractere para um índice no alfabeto (0-25).
 // Retorna -1 se o caractere for inválido. A busca é case-insensitive.
 static int char_to_index(char c) {
-    if (c >= 'A' && c <= 'Z') return c - 'A';
-    if (c >= 'a' && c <= 'z') return c - 'a';
+    if (c >= 32 && c <= 126) {  
+        return c - 32;
+    }
     return -1;
 }
 
