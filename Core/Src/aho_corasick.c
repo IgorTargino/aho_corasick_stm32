@@ -1,5 +1,5 @@
 #include "aho_corasick.h"
-#include <string.h> // Para memset e strlen
+#include <string.h> 
 
 // O vértice 0 é sempre a raiz do Trie.
 static const uint8_t ROOT_VERTEX = 0;
@@ -38,7 +38,6 @@ bool ac_add_pattern(ac_automaton_t *ac, const char* pattern) {
 
     // Verifica se há espaço para os novos vértices
     if (ac->vertex_count + pattern_len > AC_MAX_VERTICES) {
-        DEBUG_PRINTF("Erro: Nao ha vertices suficientes para o padrao \"%s\"\n", pattern);
         return false;
     }
 
@@ -74,7 +73,6 @@ bool ac_add_pattern(ac_automaton_t *ac, const char* pattern) {
         ac->patterns[ac->pattern_count] = pattern;
         v->pattern_indices[v->num_patterns++] = ac->pattern_count++;
     } else {
-        DEBUG_PRINTF("Warning: Maximo de padroes por vertice atingido.\n");
         return false;
     }
 

@@ -10,7 +10,6 @@ void aho_queue_init(aho_queue_t *q) {
 
 bool aho_queue_enqueue(aho_queue_t *q, uint8_t vertex_idx) {
     if (!q || aho_queue_is_full(q)) {
-        DEBUG_PRINTF("Erro: Fila cheia. Falha ao enfileirar vertice %u\n", vertex_idx);
         return false;
     }
     q->buffer[q->tail] = vertex_idx;
@@ -21,7 +20,6 @@ bool aho_queue_enqueue(aho_queue_t *q, uint8_t vertex_idx) {
 
 uint8_t aho_queue_dequeue(aho_queue_t *q) {
     if (!q || aho_queue_is_empty(q)) {
-        DEBUG_PRINTF("Erro: Fila vazia. Falha ao desenfileirar.\n");
         return INVALID_VERTEX_U8;
     }
     uint8_t vertex_idx = q->buffer[q->head];
