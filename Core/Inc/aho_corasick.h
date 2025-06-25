@@ -16,8 +16,8 @@ typedef struct {
 typedef struct ac_vertex {
     ac_transition_t transitions[AC_MAX_TRANSITIONS_PER_VERTEX];
     uint8_t num_transitions;
-    uint8_t link;             // Link de falha
-    uint8_t is_output : 1;           // Flag que indica se este estado é terminal
+    uint8_t link;                   // Link de falha
+    uint8_t is_output : 1;          // Flag que indica se este estado é terminal
     uint8_t num_patterns : 7;     // Número de padrões que terminam aqui
     uint8_t pattern_indices[AC_MAX_PATTERNS_PER_VERTEX];
 } ac_vertex_t;

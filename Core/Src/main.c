@@ -134,7 +134,6 @@ int main(void)
   // Uma pequena pausa para garantir que o terminal serial esteja pronto
   HAL_Delay(100);
 
-  // Substituindo printf por UART_Transmit_String ou snprintf + HAL_UART_Transmit
   UART_Transmit_String("--- Filtro de SPAM Aho-Corasick STM32 ---\r\n");
   UART_Transmit_String("Inicializando e construindo base de dados de SPAM...\r\n\r\n");
 
