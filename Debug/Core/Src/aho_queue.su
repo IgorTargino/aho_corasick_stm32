@@ -1,0 +1,5 @@
+../Core/Src/aho_queue.c:4:6:aho_queue_init	16	static
+../Core/Src/aho_queue.c:11:6:aho_queue_enqueue	16	static
+../Core/Src/aho_queue.c:22:9:aho_queue_dequeue	32	static
+../Core/Src/aho_queue.c:33:6:aho_queue_is_empty	16	static
+../Core/Src/aho_queue.c:37:6:aho_queue_is_full	16	static

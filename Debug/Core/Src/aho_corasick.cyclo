@@ -1,0 +1,8 @@
+../Core/Src/aho_corasick.c:9:12:char_to_index	5
+../Core/Src/aho_corasick.c:19:6:ac_init	2
+../Core/Src/aho_corasick.c:31:6:ac_add_pattern	12
+../Core/Src/aho_corasick.c:84:6:ac_build	6
+../Core/Src/aho_corasick.c:110:6:ac_search	6
+../Core/Src/aho_corasick.c:126:16:find_transition	3
+../Core/Src/aho_corasick.c:135:16:get_next_state	3
+../Core/Src/aho_corasick.c:148:13:report_matches	5

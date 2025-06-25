@@ -1,0 +1,60 @@
+Configuration	TESTE_AHO_CURASIK
+STM32CubeMX 	6.14.1
+Date	06/24/2025
+MCU	STM32F030R8Tx
+
+
+
+PERIPHERALS	MODES	FUNCTIONS	PINS
+SYS	Serial_Wire	SYS_SWCLK	PA14
+SYS	Serial_Wire	SYS_SWDIO	PA13
+
+
+
+Pin Nb	PINs	FUNCTIONs	LABELs
+14	PA0	GPIO_EXTI0	B1 [Blue PushButton]
+17	PA3*	USART2_RX	
+39	PC8	GPIO_Output	LD4 [Blue Led]
+40	PC9	GPIO_Output	LD3 [Green Led]
+46	PA13	SYS_SWDIO	SWDIO
+49	PA14	SYS_SWCLK	SWCLK
+PERIPHERALS	MODES	FUNCTIONS	PINS
+SYS	Serial_Wire	SYS_SWCLK	PA14
+SYS	Serial_Wire	SYS_SWDIO	PA13
+
+
+
+Pin Nb	PINs	FUNCTIONs	LABELs
+14	PA0	GPIO_EXTI0	B1 [Blue PushButton]
+17	PA3*	USART2_RX	
+39	PC8	GPIO_Output	LD4 [Blue Led]
+40	PC9	GPIO_Output	LD3 [Green Led]
+46	PA13	SYS_SWDIO	SWDIO
+49	PA14	SYS_SWCLK	SWCLK
+
+
+
+SOFTWARE PROJECT
+
+Project Settings : 
+Project Name : TESTE_AHO_CURASIK
+Project Folder : C:\Users\AdsomVieira\STM32CubeIDE\workspace_1.18.1\TESTE_AHO_CURASIK
+Toolchain / IDE : STM32CubeIDE
+Firmware Package Name and Version : STM32Cube FW_F0 V1.11.5
+
+
+Code Generation Settings : 
+STM32Cube MCU packages and embedded software packs : Copy only the necessary library files
+Generate peripheral initialization as a pair of '.c/.h' files per peripheral : No
+Backup previously generated files when re-generating : No
+Delete previously generated files when not re-generated : Yes
+Set all free pins as analog (to optimize the power consumption) : No
+
+
+Toolchains Settings : 
+Compiler Optimizations : 
+
+
+
+
+
